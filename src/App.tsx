@@ -128,9 +128,12 @@ export default function App() {
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
   const [isVirtualCameraEnabled, setIsVirtualCameraEnabled] = useState(false);
   const [isLiveSwapping, setIsLiveSwapping] = useState(true);
+  const [isLivePlaybackEnabled, setIsLivePlaybackEnabled] = useState(false);
   const [isComparisonMode, setIsComparisonMode] = useState(false);
   const [comparisonModelA, setComparisonModelA] = useState('InStyleSwapper256 Version C');
   const [comparisonModelB, setComparisonModelB] = useState('SimSwap 512px');
+  const [faceMappings, setFaceMappings] = useState<Record<number, string>>({});
+  const [customDFMModels, setCustomDFMModels] = useState<string[]>([]);
   const swapIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const exportIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -366,6 +369,7 @@ export default function App() {
               isObscured: Math.random() > 0.8
             }));
             setDetectedFaces(newFaces);
+            setFaceMappings({}); // Reset mappings when new faces are detected
           }, stage.delay);
         }
       }, currentDelay);
@@ -381,7 +385,7 @@ export default function App() {
   };
 
   const handleSwap = useCallback(() => {
-    if (!selectedTarget || !selectedFace) return;
+    if (!selectedTarget || (!selectedFace && Object.keys(faceMappings).length === 0)) return;
     
     if (swapIntervalRef.current) clearInterval(swapIntervalRef.current);
     setIsProcessing(true);
@@ -395,13 +399,14 @@ export default function App() {
           swapIntervalRef.current = null;
           setIsProcessing(false);
           // Simulate a result by adding a blur or different seed to the target
-          setSwappedResult(`${selectedTarget.url}?swapped=${Date.now()}`);
+          // In a real app, this would send settings, faceMappings, and granularMasking to the backend
+          setSwappedResult(`${selectedTarget.url}?swapped=${Date.now()}&mappings=${Object.keys(faceMappings).length}&masking=${Object.values(settings.granularMasking).filter(Boolean).length}`);
           return 100;
         }
         return prev + Math.random() * 15;
       });
     }, 200);
-  }, [selectedTarget, selectedFace]);
+  }, [selectedTarget, selectedFace, faceMappings, settings.granularMasking]);
 
   const clearVram = () => {
     setVramUsage(0.5 + Math.random());
@@ -416,7 +421,8 @@ export default function App() {
 
     // Audio size calculation: (bitrate in kbps * duration in seconds) / (8 bits/byte * 1024 bytes/KB)
     const audioBitrateKbps = parseInt(exportAudioBitrate);
-    const audioSizeMB = (audioBitrateKbps * 15) / (8 * 1024);
+    const channelsMultiplier = exportAudioChannels === 'Mono' ? 1 : exportAudioChannels === 'Stereo' ? 2 : 6;
+    const audioSizeMB = (audioBitrateKbps * 15 * channelsMultiplier) / (8 * 1024);
 
     return (videoSizeMB + audioSizeMB).toFixed(1);
   };
@@ -540,8 +546,11 @@ export default function App() {
                         onChange={(e) => setExportAudioBitrate(e.target.value as any)}
                         className="w-full bg-[#1c1d21] border border-[#2a2b2e] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
                       >
+                        <option value="64">64 kbps</option>
+                        <option value="96">96 kbps</option>
                         <option value="128">128 kbps</option>
                         <option value="192">192 kbps</option>
+                        <option value="256">256 kbps</option>
                         <option value="320">320 kbps</option>
                       </select>
                     </div>
@@ -554,6 +563,7 @@ export default function App() {
                       >
                         <option>Mono</option>
                         <option>Stereo</option>
+                        <option>5.1 Surround</option>
                       </select>
                     </div>
                   </div>
@@ -691,24 +701,44 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-4 gap-2">
-              {faces.map(face => (
-                <motion.div
-                  key={face.id}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setSelectedFace(face)}
-                  className={`aspect-square rounded-md overflow-hidden cursor-pointer border-2 transition-all ${
-                    selectedFace?.id === face.id ? 'border-cyan-500' : 'border-transparent hover:border-[#3a3b3e]'
-                  }`}
-                >
-                  <img 
-                    src={face.url} 
-                    alt={face.name} 
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                </motion.div>
-              ))}
+              {faces.map(face => {
+                const isSelected = settings.faceEmbeddings 
+                  ? settings.selectedEmbeddingFaces.includes(face.id)
+                  : selectedFace?.id === face.id;
+
+                return (
+                  <motion.div
+                    key={face.id}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => {
+                      if (settings.faceEmbeddings) {
+                        const newSelection = settings.selectedEmbeddingFaces.includes(face.id)
+                          ? settings.selectedEmbeddingFaces.filter(id => id !== face.id)
+                          : [...settings.selectedEmbeddingFaces, face.id];
+                        setSettings({ ...settings, selectedEmbeddingFaces: newSelection });
+                      } else {
+                        setSelectedFace(face);
+                      }
+                    }}
+                    className={`aspect-square rounded-md overflow-hidden cursor-pointer border-2 transition-all relative ${
+                      isSelected ? 'border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.4)]' : 'border-transparent hover:border-[#3a3b3e]'
+                    }`}
+                  >
+                    <img 
+                      src={face.url} 
+                      alt={face.name} 
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    {settings.faceEmbeddings && isSelected && (
+                      <div className="absolute top-1 right-1 bg-cyan-500 rounded-full p-0.5">
+                        <Check className="w-2 h-2 text-white" />
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
               <label className="aspect-square rounded-md border-2 border-dashed border-[#2a2b2e] flex items-center justify-center hover:border-cyan-500/50 hover:bg-cyan-500/5 transition-all group cursor-pointer">
                 <Plus className="w-5 h-5 opacity-30 group-hover:opacity-100 transition-opacity" />
                 <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
@@ -961,6 +991,22 @@ export default function App() {
                 </div>
               </div>
               <div className="flex-1 relative bg-black flex items-center justify-center">
+                <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+                  <Tooltip text="Enable real-time preview of the processed video.">
+                    <button 
+                      onClick={() => setIsLivePlaybackEnabled(!isLivePlaybackEnabled)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${
+                        isLivePlaybackEnabled 
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.3)]' 
+                          : 'bg-black/40 border-[#2a2b2e] text-[#8e9299] hover:text-white'
+                      }`}
+                    >
+                      <Play className={`w-3 h-3 ${isLivePlaybackEnabled ? 'animate-pulse' : ''}`} />
+                      <span className="text-[10px] font-bold uppercase tracking-widest">Live Playback</span>
+                    </button>
+                  </Tooltip>
+                </div>
+
                 <AnimatePresence mode="wait">
                   {isProcessing ? (
                     <motion.div 
@@ -1013,6 +1059,17 @@ export default function App() {
                     <div className="w-full h-full flex gap-1 p-1">
                       <div className="flex-1 relative bg-black/40 rounded overflow-hidden group">
                         <img src={swappedResult} className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                        {isLivePlaybackEnabled && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="w-full h-1 bg-cyan-500/20 absolute bottom-0">
+                              <motion.div 
+                                className="h-full bg-cyan-500"
+                                animate={{ width: ['0%', '100%'] }}
+                                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                              />
+                            </div>
+                          </div>
+                        )}
                         <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md border border-cyan-500/30 rounded text-[8px] font-bold text-cyan-400 uppercase tracking-tighter">
                           Model A: {comparisonModelA}
                         </div>
@@ -1020,20 +1077,53 @@ export default function App() {
                       <div className="w-px bg-cyan-500/20 self-stretch" />
                       <div className="flex-1 relative bg-black/40 rounded overflow-hidden group">
                         <img src={swappedResult} className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" style={{ filter: 'hue-rotate(15deg) contrast(1.1)' }} referrerPolicy="no-referrer" />
+                        {isLivePlaybackEnabled && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="w-full h-1 bg-orange-500/20 absolute bottom-0">
+                              <motion.div 
+                                className="h-full bg-orange-500"
+                                animate={{ width: ['0%', '100%'] }}
+                                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                              />
+                            </div>
+                          </div>
+                        )}
                         <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md border border-orange-500/30 rounded text-[8px] font-bold text-orange-400 uppercase tracking-tighter">
                           Model B: {comparisonModelB}
                         </div>
                       </div>
                     </div>
                   ) : swappedResult ? (
-                    <motion.img 
+                    <motion.div 
                       key={swappedResult}
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
-                      src={swappedResult} 
-                      className="max-w-full max-h-full object-contain" 
-                      referrerPolicy="no-referrer"
-                    />
+                      className="relative w-full h-full flex items-center justify-center"
+                    >
+                      <img 
+                        src={swappedResult} 
+                        className="max-w-full max-h-full object-contain" 
+                        referrerPolicy="no-referrer"
+                      />
+                      {isLivePlaybackEnabled && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 border-2 border-cyan-500/20 rounded-full flex items-center justify-center">
+                            <Play className="w-4 h-4 text-cyan-500 fill-current animate-pulse" />
+                          </div>
+                          <div className="w-full h-1 bg-cyan-500/10 absolute bottom-0">
+                            <motion.div 
+                              className="h-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]"
+                              animate={{ width: ['0%', '100%'] }}
+                              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                            />
+                          </div>
+                          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md border border-cyan-500/30 rounded px-2 py-1 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                            <span className="text-[8px] font-bold text-white uppercase tracking-widest">Live Preview</span>
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
                   ) : (
                     <div className="flex flex-col items-center opacity-20">
                       <Zap className="w-16 h-16 mb-4" />
@@ -1128,7 +1218,9 @@ export default function App() {
           
           <div className="space-y-2">
             <div className="flex items-center justify-between text-[10px] font-mono">
-              <span className="text-cyan-400">{vramUsage.toFixed(2)} GB / 8.0 GB ({(vramUsage / 8 * 100).toFixed(0)}%)</span>
+              <Tooltip text="GPU: NVIDIA GeForce RTX 3070 Ti (8GB GDDR6X) | Driver: 535.104.05 | Compute: CUDA 12.2">
+                <span className="text-cyan-400 cursor-help">{vramUsage.toFixed(2)} GB / 8.0 GB ({(vramUsage / 8 * 100).toFixed(0)}%)</span>
+              </Tooltip>
               <button onClick={clearVram} className="hover:text-white transition-colors">Clear VRAM</button>
             </div>
             <div className="h-1.5 w-full bg-[#1c1d21] rounded-full overflow-hidden border border-[#2a2b2e]">
@@ -1174,22 +1266,92 @@ export default function App() {
                 </div>
                 <div className="space-y-3">
                   <div className="space-y-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <label className="text-[10px] text-[#8e9299]">Swapper Model</label>
-                      <Tooltip text="Choose between different AI models. Higher resolution models (512px) provide better detail but require more VRAM.">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-[10px] text-[#8e9299]">Swapper Model</label>
+                        <Tooltip text="Choose between different AI models. Higher resolution models (512px) provide better detail but require more VRAM.">
+                          <Info className="w-2.5 h-2.5 text-cyan-500/30 cursor-help" />
+                        </Tooltip>
+                      </div>
+                    </div>
+
+                    <div 
+                      className="relative group"
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.classList.add('border-cyan-500/50', 'bg-cyan-500/5');
+                      }}
+                      onDragLeave={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.classList.remove('border-cyan-500/50', 'bg-cyan-500/5');
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.classList.remove('border-cyan-500/50', 'bg-cyan-500/5');
+                        const file = e.dataTransfer.files[0];
+                        if (file && (file.name.endsWith('.dfm') || file.type === 'image/png')) {
+                          setCustomDFMModels([...customDFMModels, file.name]);
+                          setSettings({...settings, swapperModel: file.name});
+                        }
+                      }}
+                    >
+                      <select 
+                        value={settings.swapperModel}
+                        onChange={e => setSettings({...settings, swapperModel: e.target.value})}
+                        className="w-full bg-[#1c1d21] border border-[#2a2b2e] rounded-md py-1.5 px-3 text-xs focus:outline-none focus:border-cyan-500/50 transition-colors"
+                      >
+                        <option>InStyleSwapper256 Version C</option>
+                        <option>SimSwap 512px</option>
+                        <option>InsightFace 128px</option>
+                        <option>DeepFaceLab DFM (Custom)</option>
+                        {customDFMModels.map(model => (
+                          <option key={model} value={model}>{model}</option>
+                        ))}
+                      </select>
+                      
+                      <label className="absolute right-8 top-1/2 -translate-y-1/2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
+                        <input 
+                          type="file" 
+                          accept=".dfm,.png" 
+                          className="hidden" 
+                          onChange={e => {
+                            if (e.target.files?.[0]) {
+                              setCustomDFMModels([...customDFMModels, e.target.files[0].name]);
+                              setSettings({...settings, swapperModel: e.target.files[0].name});
+                            }
+                          }}
+                        />
+                        <Tooltip text="Upload .dfm model or .png image">
+                          <Plus className="w-3 h-3 text-cyan-500 hover:text-cyan-400" />
+                        </Tooltip>
+                      </label>
+                    </div>
+                    
+                    <div className="text-[8px] text-[#8e9299] italic px-1">
+                      Drag & drop .dfm or .png here to load custom models
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2 bg-black/20 rounded border border-[#2a2b2e]">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] uppercase font-bold text-[#8e9299]">Face Embeddings</span>
+                      <Tooltip text="Use multiple source faces to create a more accurate face embedding for the swap.">
                         <Info className="w-2.5 h-2.5 text-cyan-500/30 cursor-help" />
                       </Tooltip>
                     </div>
-                    <select 
-                      value={settings.swapperModel}
-                      onChange={e => setSettings({...settings, swapperModel: e.target.value})}
-                      className="w-full bg-[#1c1d21] border border-[#2a2b2e] rounded-md py-1.5 px-3 text-xs focus:outline-none focus:border-cyan-500/50"
-                    >
-                      <option>InStyleSwapper256 Version C</option>
-                      <option>SimSwap 512px</option>
-                      <option>InsightFace 128px</option>
-                      <option>DeepFaceLab DFM (Custom)</option>
-                    </select>
+                    <input 
+                      type="checkbox" 
+                      checked={settings.faceEmbeddings}
+                      onChange={e => {
+                        pushToHistory();
+                        setSettings({
+                          ...settings, 
+                          faceEmbeddings: e.target.checked,
+                          selectedEmbeddingFaces: e.target.checked && selectedFace ? [selectedFace.id] : []
+                        });
+                      }}
+                      className="accent-cyan-500"
+                    />
                   </div>
 
                   {/* Model Comparison Section */}
@@ -1265,6 +1427,49 @@ export default function App() {
                     />
                   </div>
                 </div>
+
+                {/* Face Mapping Section */}
+                {detectedFaces.length > 0 && (
+                  <div className="space-y-4 pt-4 border-t border-[#2a2b2e]">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-[11px] font-bold uppercase text-cyan-500">Multi-Face Mapping</h3>
+                      <Tooltip text="Map detected target faces to specific source faces.">
+                        <Info className="w-3 h-3 text-cyan-500/50 cursor-help" />
+                      </Tooltip>
+                    </div>
+                    <div className="space-y-2">
+                      {detectedFaces.map((face, i) => (
+                        <div key={i} className="flex items-center gap-3 bg-[#1c1d21] p-2 rounded-lg border border-[#2a2b2e] group hover:border-cyan-500/30 transition-colors">
+                          <div className="w-10 h-10 bg-black rounded border border-[#2a2b2e] flex items-center justify-center text-[10px] font-bold text-cyan-500">
+                            #{i + 1}
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-[9px] text-[#8e9299] uppercase mb-1">Target Face #{i + 1}</div>
+                            <select 
+                              value={faceMappings[i] || ''}
+                              onChange={e => setFaceMappings({...faceMappings, [i]: e.target.value})}
+                              className="w-full bg-black/40 border border-[#2a2b2e] rounded py-1 px-2 text-[10px] focus:outline-none focus:border-cyan-500/50"
+                            >
+                              <option value="">Auto-Swap (Closest Match)</option>
+                              {faces.map(f => (
+                                <option key={f.id} value={f.id}>{f.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          {faceMappings[i] && (
+                            <div className="w-10 h-10 rounded border border-cyan-500/50 overflow-hidden">
+                              <img 
+                                src={faces.find(f => f.id === faceMappings[i])?.url} 
+                                className="w-full h-full object-cover" 
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Detection Settings */}
@@ -1532,25 +1737,69 @@ export default function App() {
                       className="accent-cyan-500"
                     />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <label className="text-[10px] flex items-center gap-2">
-                        <Maximize2 className="w-3 h-3 text-cyan-400" />
-                        AI Upscaling
-                      </label>
-                      <Tooltip text="Uses AI to increase the resolution and detail of the swapped face.">
-                        <Info className="w-2.5 h-2.5 text-cyan-500/30 cursor-help" />
-                      </Tooltip>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <label className="text-[10px] flex items-center gap-2">
+                          <Maximize2 className="w-3 h-3 text-cyan-400" />
+                          AI Upscaling
+                        </label>
+                        <Tooltip text="Uses AI to increase the resolution and detail of the swapped face.">
+                          <Info className="w-2.5 h-2.5 text-cyan-500/30 cursor-help" />
+                        </Tooltip>
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        checked={settings.upscaling}
+                        onChange={e => {
+                          pushToHistory();
+                          setSettings({...settings, upscaling: e.target.checked});
+                        }}
+                        className="accent-cyan-500"
+                      />
                     </div>
-                    <input 
-                      type="checkbox" 
-                      checked={settings.upscaling}
-                      onChange={e => {
-                        pushToHistory();
-                        setSettings({...settings, upscaling: e.target.checked});
-                      }}
-                      className="accent-cyan-500"
-                    />
+                    {settings.upscaling && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="pl-5 space-y-3 border-l border-cyan-500/20"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-[8px] uppercase text-[#8e9299]">
+                            <span>Upscale Model</span>
+                          </div>
+                          <select 
+                            value={settings.upscaleModel}
+                            onChange={e => setSettings({...settings, upscaleModel: e.target.value as any})}
+                            className="w-full bg-[#1c1d21] border border-[#2a2b2e] rounded px-2 py-1 text-[10px] text-white focus:outline-none focus:border-cyan-500"
+                          >
+                            <option>Real-ESRGAN</option>
+                            <option>SwinIR</option>
+                            <option>BSRGAN</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-[8px] uppercase text-[#8e9299]">
+                            <span>Upscale Factor</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {(['2x', '4x'] as const).map(factor => (
+                              <button
+                                key={factor}
+                                onClick={() => setSettings({...settings, upscaleFactor: factor})}
+                                className={`py-1 rounded border text-[9px] font-bold transition-all ${
+                                  settings.upscaleFactor === factor 
+                                    ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' 
+                                    : 'bg-black/20 border-[#2a2b2e] text-[#8e9299] hover:border-[#3a3b3e]'
+                                }`}
+                              >
+                                {factor}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -1622,7 +1871,7 @@ export default function App() {
                 
                 <div className="aspect-square rounded-md overflow-hidden border border-[#2a2b2e] bg-black relative group">
                   {selectedFace ? (
-                    <div className="w-full h-full flex items-center justify-center overflow-hidden">
+                    <div className="w-full h-full flex items-center justify-center overflow-hidden relative">
                       <motion.img 
                         src={selectedFace.url} 
                         alt="Editor Preview" 
@@ -1635,6 +1884,50 @@ export default function App() {
                         style={{ mixBlendMode: settings.blendMode as any }}
                         referrerPolicy="no-referrer"
                       />
+                      
+                      {/* Granular Masking Visualization Overlay */}
+                      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        {settings.granularMasking.eyes && (
+                          <motion.path 
+                            d="M25,40 Q35,35 45,40 Q35,45 25,40 M55,40 Q65,35 75,40 Q65,45 55,40" 
+                            fill="rgba(6,182,212,0.2)" 
+                            stroke="rgba(6,182,212,0.5)" 
+                            strokeWidth="0.5"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                          />
+                        )}
+                        {settings.granularMasking.nose && (
+                          <motion.path 
+                            d="M45,45 Q50,40 55,45 L52,60 Q50,65 48,60 Z" 
+                            fill="rgba(6,182,212,0.2)" 
+                            stroke="rgba(6,182,212,0.5)" 
+                            strokeWidth="0.5"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                          />
+                        )}
+                        {settings.granularMasking.mouth && (
+                          <motion.path 
+                            d="M35,70 Q50,65 65,70 Q50,80 35,70" 
+                            fill="rgba(6,182,212,0.2)" 
+                            stroke="rgba(6,182,212,0.5)" 
+                            strokeWidth="0.5"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                          />
+                        )}
+                        {settings.granularMasking.brows && (
+                          <motion.path 
+                            d="M20,35 Q35,30 45,35 M55,35 Q65,30 80,35" 
+                            fill="none" 
+                            stroke="rgba(6,182,212,0.5)" 
+                            strokeWidth="1"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                          />
+                        )}
+                      </svg>
                     </div>
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center text-[10px] opacity-30 uppercase font-bold tracking-widest">No Face Selected</div>
@@ -1750,42 +2043,80 @@ export default function App() {
 
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-[11px] font-bold uppercase text-[#8e9299]">RGB Color Grading</h3>
-                    <Tooltip text="Fine-tune colors for specific face parts using RGB adjustments.">
+                    <h3 className="text-[11px] font-bold uppercase text-[#8e9299]">Advanced Color Grading</h3>
+                    <Tooltip text="Fine-tune colors for specific face parts using HSL adjustments for each RGB channel.">
                       <Info className="w-3 h-3 text-cyan-500/50 cursor-help" />
                     </Tooltip>
                   </div>
-                  <div className="space-y-3">
+                  <div className="space-y-6">
                     {(['face', 'hair', 'lips'] as const).map(part => (
-                      <div key={part} className="space-y-2">
-                        <span className="text-[9px] font-bold uppercase text-cyan-500/70">{part}</span>
-                        <div className="grid grid-cols-3 gap-2">
-                          {(['r', 'g', 'b'] as const).map(color => (
-                            <div key={color} className="space-y-1">
-                              <div className="flex justify-between text-[8px]">
-                                <span className="uppercase opacity-50">{color}</span>
-                                <span className="font-mono text-cyan-400">{(settings.colorGrading as any)[part][color]}%</span>
+                      <div key={part} className="space-y-3 p-3 bg-black/20 rounded-lg border border-[#2a2b2e]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase text-cyan-500">{part}</span>
+                          <button 
+                            onClick={() => {
+                              pushToHistory();
+                              setSettings({
+                                ...settings,
+                                colorGrading: {
+                                  ...settings.colorGrading,
+                                  [part]: {
+                                    r: { h: 0, s: 100, l: 100 },
+                                    g: { h: 0, s: 100, l: 100 },
+                                    b: { h: 0, s: 100, l: 100 },
+                                  }
+                                }
+                              });
+                            }}
+                            className="text-[8px] text-[#8e9299] hover:text-white uppercase"
+                          >
+                            Reset {part}
+                          </button>
+                        </div>
+                        <div className="space-y-4">
+                          {(['r', 'g', 'b'] as const).map(channel => (
+                            <div key={channel} className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-1.5 h-1.5 rounded-full ${channel === 'r' ? 'bg-red-500' : channel === 'g' ? 'bg-green-500' : 'bg-blue-500'}`} />
+                                <span className="text-[9px] uppercase opacity-50">{channel} Channel</span>
                               </div>
-                              <input 
-                                type="range" 
-                                min="0" 
-                                max="200" 
-                                value={(settings.colorGrading as any)[part][color]}
-                                onMouseDown={pushToHistory}
-                                onChange={e => {
-                                  const newVal = parseInt(e.target.value);
-                                  setSettings({
-                                    ...settings,
-                                    colorGrading: {
-                                      ...settings.colorGrading,
-                                      [part]: { ...settings.colorGrading[part], [color]: newVal }
-                                    }
-                                  });
-                                }}
-                                className={`w-full h-1 bg-[#1c1d21] rounded-full appearance-none cursor-pointer ${
-                                  color === 'r' ? 'accent-red-500' : color === 'g' ? 'accent-green-500' : 'accent-blue-500'
-                                }`}
-                              />
+                              <div className="grid grid-cols-1 gap-2 pl-3">
+                                {(['h', 's', 'l'] as const).map(param => (
+                                  <div key={param} className="space-y-1">
+                                    <div className="flex justify-between text-[8px]">
+                                      <span className="uppercase opacity-40">{param === 'h' ? 'Hue' : param === 's' ? 'Saturation' : 'Lightness'}</span>
+                                      <span className="font-mono text-cyan-400">
+                                        {(settings.colorGrading[part][channel] as any)[param]}
+                                        {param === 'h' ? '°' : '%'}
+                                      </span>
+                                    </div>
+                                    <input 
+                                      type="range" 
+                                      min={param === 'h' ? "-180" : "0"} 
+                                      max={param === 'h' ? "180" : "200"} 
+                                      value={(settings.colorGrading[part][channel] as any)[param]}
+                                      onMouseDown={pushToHistory}
+                                      onChange={e => {
+                                        const newVal = parseInt(e.target.value);
+                                        setSettings({
+                                          ...settings,
+                                          colorGrading: {
+                                            ...settings.colorGrading,
+                                            [part]: {
+                                              ...settings.colorGrading[part],
+                                              [channel]: {
+                                                ...settings.colorGrading[part][channel],
+                                                [param]: newVal
+                                              }
+                                            }
+                                          }
+                                        });
+                                      }}
+                                      className={`w-full h-0.5 bg-[#1c1d21] rounded-full appearance-none cursor-pointer accent-cyan-500`}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1798,6 +2129,55 @@ export default function App() {
               <div className="bg-[#1c1d21] rounded-lg border border-[#2a2b2e] p-4 space-y-4">
                 <h3 className="text-[11px] font-bold uppercase text-[#8e9299]">Masking & Blending</h3>
                 
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-2 bg-black/20 rounded border border-[#2a2b2e]">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] uppercase font-bold text-[#8e9299]">Face Embeddings</span>
+                      <Tooltip text="Use multiple source faces to create a more accurate face embedding for the swap.">
+                        <Info className="w-2.5 h-2.5 text-cyan-500/30 cursor-help" />
+                      </Tooltip>
+                    </div>
+                    <input 
+                      type="checkbox" 
+                      checked={settings.faceEmbeddings}
+                      onChange={e => {
+                        pushToHistory();
+                        setSettings({
+                          ...settings, 
+                          faceEmbeddings: e.target.checked,
+                          selectedEmbeddingFaces: e.target.checked && selectedFace ? [selectedFace.id] : []
+                        });
+                      }}
+                      className="accent-cyan-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] text-[#8e9299] uppercase font-bold">Blending Mode</label>
+                    <Tooltip text="Determines how the swapped face is composited onto the target. Normal is standard, Multiply darkens, and Overlay increases contrast.">
+                      <Info className="w-2.5 h-2.5 text-cyan-500/30 cursor-help" />
+                    </Tooltip>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['normal', 'multiply', 'overlay'] as const).map(mode => (
+                      <button
+                        key={mode}
+                        onClick={() => {
+                          pushToHistory();
+                          setSettings({...settings, blendMode: mode});
+                        }}
+                        className={`py-1.5 rounded border text-[9px] font-bold uppercase transition-all ${
+                          settings.blendMode === mode 
+                            ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' 
+                            : 'bg-black/20 border-[#2a2b2e] text-[#8e9299] hover:border-[#3a3b3e]'
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex items-center justify-between p-2 bg-black/20 rounded border border-[#2a2b2e]">
                     <span className="text-[9px] uppercase font-bold text-[#8e9299]">Occlusion</span>
@@ -1822,6 +2202,32 @@ export default function App() {
                       }}
                       className="accent-cyan-500"
                     />
+                  </div>
+
+                  <div className="pt-2 space-y-2 border-t border-[#2a2b2e]/50">
+                    <label className="text-[9px] text-[#8e9299] uppercase font-bold">Granular Masking</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {Object.entries(settings.granularMasking).map(([part, enabled]) => (
+                        <div key={part} className="flex items-center justify-between bg-[#1c1d21] p-1.5 rounded border border-[#2a2b2e]">
+                          <span className="text-[9px] capitalize">{part}</span>
+                          <input 
+                            type="checkbox" 
+                            checked={enabled}
+                            onChange={e => {
+                              pushToHistory();
+                              setSettings({
+                                ...settings, 
+                                granularMasking: {
+                                  ...settings.granularMasking,
+                                  [part]: e.target.checked
+                                }
+                              });
+                            }}
+                            className="accent-cyan-500 scale-75"
+                          />
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
 

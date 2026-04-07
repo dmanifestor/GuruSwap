@@ -26,6 +26,10 @@ export interface SwapSettings {
   dflXSegMask: boolean;
   blendMode: 'normal' | 'multiply' | 'overlay';
   upscaling: boolean;
+  upscaleFactor: '2x' | '4x';
+  upscaleModel: 'Real-ESRGAN' | 'SwinIR' | 'BSRGAN';
+  faceEmbeddings: boolean;
+  selectedEmbeddingFaces: string[];
   stabilization: boolean;
   expressionRestorer: number;
   faceEnhancer: 'none' | 'GFPGAN' | 'CodeFormer' | 'GPEN';
@@ -34,10 +38,28 @@ export interface SwapSettings {
   tensorRT: boolean;
   livePortraitExpression: number;
   livePortraitPose: number;
+  granularMasking: {
+    eyes: boolean;
+    nose: boolean;
+    mouth: boolean;
+    brows: boolean;
+  };
   colorGrading: {
-    face: { r: number, g: number, b: number };
-    hair: { r: number, g: number, b: number };
-    lips: { r: number, g: number, b: number };
+    face: {
+      r: { h: number, s: number, l: number };
+      g: { h: number, s: number, l: number };
+      b: { h: number, s: number, l: number };
+    };
+    hair: {
+      r: { h: number, s: number, l: number };
+      g: { h: number, s: number, l: number };
+      b: { h: number, s: number, l: number };
+    };
+    lips: {
+      r: { h: number, s: number, l: number };
+      g: { h: number, s: number, l: number };
+      b: { h: number, s: number, l: number };
+    };
   };
 }
 
@@ -55,6 +77,10 @@ export const DEFAULT_SETTINGS: SwapSettings = {
   dflXSegMask: true,
   blendMode: 'normal',
   upscaling: false,
+  upscaleFactor: '2x',
+  upscaleModel: 'Real-ESRGAN',
+  faceEmbeddings: false,
+  selectedEmbeddingFaces: [],
   stabilization: false,
   expressionRestorer: 50,
   faceEnhancer: 'CodeFormer',
@@ -63,9 +89,27 @@ export const DEFAULT_SETTINGS: SwapSettings = {
   tensorRT: false,
   livePortraitExpression: 0,
   livePortraitPose: 0,
+  granularMasking: {
+    eyes: true,
+    nose: true,
+    mouth: true,
+    brows: true,
+  },
   colorGrading: {
-    face: { r: 100, g: 100, b: 100 },
-    hair: { r: 100, g: 100, b: 100 },
-    lips: { r: 100, g: 100, b: 100 },
+    face: {
+      r: { h: 0, s: 100, l: 100 },
+      g: { h: 0, s: 100, l: 100 },
+      b: { h: 0, s: 100, l: 100 },
+    },
+    hair: {
+      r: { h: 0, s: 100, l: 100 },
+      g: { h: 0, s: 100, l: 100 },
+      b: { h: 0, s: 100, l: 100 },
+    },
+    lips: {
+      r: { h: 0, s: 100, l: 100 },
+      g: { h: 0, s: 100, l: 100 },
+      b: { h: 0, s: 100, l: 100 },
+    },
   },
 };
