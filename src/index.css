@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .mirror {
+    transform: scaleX(-1);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #2a2b2e;
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #3a3b3e;
+  }
+}
+
+body {
+  @apply bg-[#0b0c0e] text-white overflow-hidden;
+  font-family: 'Inter', sans-serif;
+}

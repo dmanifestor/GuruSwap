@@ -1,0 +1,5 @@
+{
+  "name": "GuruSwap",
+  "description": "Powerful AI-driven video and image face swapping tool. Fast, realistic, and professional-grade.",
+  "requestFramePermissions": ["camera"]
+}
