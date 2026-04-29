@@ -33,8 +33,8 @@ export interface SwapSettings {
   stabilization: boolean;
   expressionRestorer: number;
   faceEnhancer: 'none' | 'GFPGAN' | 'CodeFormer' | 'GPEN';
-  faceDetector: 'RetinaFace' | 'YOLOv5' | 'MediaPipe';
-  landmarkDetector: '68-points' | '5-points';
+  faceDetector: 'RetinaFace' | 'YOLOv5' | 'MediaPipe' | 'MTCNN' | 'SSD' | 'SCRFD' | 'Dlib';
+  landmarkDetector: '68-points' | '5-points' | 'FaceMesh';
   tensorRT: boolean;
   livePortraitExpression: number;
   livePortraitPose: number;

@@ -33,9 +33,14 @@ import {
   MoreVertical,
   Download,
   Info,
+  Columns,
+  Share2,
+  Clock,
+  Wifi,
+  Radio,
+  Gamepad2,
   Undo2,
   Redo2,
-  Radio
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MediaItem, FaceItem, SwapSettings, DEFAULT_SETTINGS } from './types.ts';
@@ -110,6 +115,8 @@ export default function App() {
   const [swappedResult, setSwappedResult] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('Face Swap');
   const [vramUsage, setVramUsage] = useState(7.16);
+  const [totalVram] = useState(12.0);
+  const [overlayTransparency, setOverlayTransparency] = useState(100);
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectionStage, setDetectionStage] = useState('');
   const [detectionModel, setDetectionModel] = useState('RetinaFace-ResNet50');
@@ -129,13 +136,34 @@ export default function App() {
   const [isVirtualCameraEnabled, setIsVirtualCameraEnabled] = useState(false);
   const [isLiveSwapping, setIsLiveSwapping] = useState(true);
   const [isLivePlaybackEnabled, setIsLivePlaybackEnabled] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [isComparisonMode, setIsComparisonMode] = useState(false);
   const [comparisonModelA, setComparisonModelA] = useState('InStyleSwapper256 Version C');
   const [comparisonModelB, setComparisonModelB] = useState('SimSwap 512px');
   const [faceMappings, setFaceMappings] = useState<Record<number, string>>({});
   const [customDFMModels, setCustomDFMModels] = useState<string[]>([]);
+  const [toast, setToast] = useState<{ message: string, type: 'info' | 'success' | 'error' } | null>(null);
+  const [isScanningFolder, setIsScanningFolder] = useState(false);
   const swapIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const exportIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const targetFolderInputRef = React.useRef<HTMLInputElement>(null);
+  const facesFolderInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setVramUsage(prev => {
+        const delta = (Math.random() - 0.5) * 0.1;
+        const next = Math.max(0.5, Math.min(totalVram - 1, prev + delta));
+        return parseFloat(next.toFixed(2));
+      });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [totalVram]);
+
+  const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   // Cleanup intervals on unmount
   const toggleWebcam = useCallback(async () => {
@@ -146,8 +174,10 @@ export default function App() {
       setWebcamStream(null);
       setIsWebcamActive(false);
       setSelectedTarget(targets[0]);
+      showToast("Webcam stream stopped", "info");
     } else {
       try {
+        showToast("Requesting camera access...", "info");
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         setWebcamStream(stream);
         setIsWebcamActive(true);
@@ -157,8 +187,10 @@ export default function App() {
           type: 'video',
           name: 'Live Webcam Feed'
         });
+        showToast("Webcam feed active", "success");
       } catch (err) {
         console.error("Error accessing webcam:", err);
+        showToast("Camera access denied or failed", "error");
       }
     }
   }, [isWebcamActive, webcamStream, targets]);
@@ -337,6 +369,89 @@ export default function App() {
     }
   };
 
+  const handleTargetUpload = (file: File) => {
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const type = file.type.startsWith('video/') ? 'video' : 'image';
+        const newItem: MediaItem = {
+          id: `t${Date.now()}`,
+          url: event.target?.result as string,
+          type: type as any,
+          name: file.name,
+          thumbnail: type === 'video' ? undefined : event.target?.result as string
+        };
+        setTargets(prev => [...prev, newItem]);
+        setSelectedTarget(newItem);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>, category: 'target' | 'faces') => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    setIsScanningFolder(true);
+    showToast(`Scanning folder for ${category} files...`, 'info');
+
+    const files = Array.from(fileList) as File[];
+    let addedCount = 0;
+
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/');
+      const isVideo = file.type.startsWith('video/');
+
+      if (category === 'faces' && !isImage) continue;
+      if (category === 'target' && !isImage && !isVideo) continue;
+
+      try {
+        const url = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        if (category === 'faces') {
+          const newFace: FaceItem = {
+            id: `f${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            url,
+            name: file.name
+          };
+          setFaces(prev => {
+            if (prev.some(f => f.name === file.name)) return prev;
+            return [...prev, newFace];
+          });
+        } else {
+          const type = isVideo ? 'video' : 'image';
+          const newItem: MediaItem = {
+            id: `t${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            url,
+            type: type as any,
+            name: file.name,
+            thumbnail: type === 'video' ? undefined : url
+          };
+          setTargets(prev => {
+            if (prev.some(t => t.name === file.name)) return prev;
+            return [...prev, newItem];
+          });
+        }
+        addedCount++;
+      } catch (err) {
+        console.error(`Error loading file ${file.name}:`, err);
+      }
+    }
+
+    setIsScanningFolder(false);
+    if (addedCount > 0) {
+      showToast(`Successfully added ${addedCount} files to ${category}.`, 'success');
+    } else {
+      showToast(`No compatible files found in chosen folder.`, 'error');
+    }
+    e.target.value = '';
+  };
+
   const handleDetectFaces = useCallback(() => {
     if (!selectedTarget) return;
     setIsDetecting(true);
@@ -392,24 +507,31 @@ export default function App() {
     setProgress(0);
     setSwappedResult(null);
 
+    // Increase VRAM usage during swap
+    setVramUsage(prev => Math.min(totalVram - 0.5, prev + 1.2));
+
     swapIntervalRef.current = setInterval(() => {
       setProgress(prev => {
         if (prev >= 100) {
           if (swapIntervalRef.current) clearInterval(swapIntervalRef.current);
           swapIntervalRef.current = null;
           setIsProcessing(false);
-          // Simulate a result by adding a blur or different seed to the target
-          // In a real app, this would send settings, faceMappings, and granularMasking to the backend
-          setSwappedResult(`${selectedTarget.url}?swapped=${Date.now()}&mappings=${Object.keys(faceMappings).length}&masking=${Object.values(settings.granularMasking).filter(Boolean).length}`);
+          
+          // Simulation of swapped result
+          const baseUrl = isWebcamActive ? 'https://picsum.photos/seed/webcam/800/600' : selectedTarget.url;
+          setSwappedResult(`${baseUrl}?swapped=${Date.now()}&mappings=${Object.keys(faceMappings).length}`);
+          setComparisonModelA(settings.swapperModel);
+          showToast("Swap completed successfully", "success");
           return 100;
         }
-        return prev + Math.random() * 15;
+        return prev + Math.random() * 20;
       });
-    }, 200);
-  }, [selectedTarget, selectedFace, faceMappings, settings.granularMasking]);
+    }, 150);
+  }, [selectedTarget, selectedFace, faceMappings, settings.granularMasking, isWebcamActive]);
 
   const clearVram = () => {
-    setVramUsage(0.5 + Math.random());
+    setVramUsage(0.8 + Math.random() * 2);
+    showToast("VRAM cache cleared", "info");
   };
 
   const calculateEstimatedSize = () => {
@@ -631,8 +753,18 @@ export default function App() {
               <h2 className="text-xs font-semibold uppercase tracking-widest text-[#8e9299]">Target Videos/Images</h2>
               <div className="flex items-center gap-2">
                 <Tooltip text="Open local folder">
-                  <FolderOpen className="w-4 h-4 text-orange-400 cursor-pointer hover:scale-110 transition-transform" />
+                  <FolderOpen 
+                    onClick={() => targetFolderInputRef.current?.click()}
+                    className="w-4 h-4 text-orange-400 cursor-pointer hover:scale-110 transition-transform" 
+                  />
                 </Tooltip>
+                <input
+                  type="file"
+                  ref={targetFolderInputRef}
+                  className="hidden"
+                  {...({ webkitdirectory: "", directory: "" } as any)}
+                  onChange={(e) => handleFolderUpload(e, 'target')}
+                />
                 <Tooltip text={isWebcamActive ? "Stop Webcam" : "Use Webcam as target source"}>
                   <button 
                     onClick={toggleWebcam}
@@ -680,6 +812,25 @@ export default function App() {
                   )}
                 </motion.div>
               ))}
+              <label className="aspect-square rounded-md border-2 border-dashed border-[#2a2b2e] flex items-center justify-center hover:border-cyan-500/50 hover:bg-cyan-500/5 transition-all group cursor-pointer">
+                <Plus className="w-5 h-5 opacity-30 group-hover:opacity-100 transition-opacity" />
+                <input type="file" className="hidden" accept="image/*,video/*" onChange={(e) => e.target.files?.[0] && handleTargetUpload(e.target.files[0])} />
+              </label>
+            </div>
+
+            <div 
+              className="border-2 border-dashed border-[#2a2b2e] rounded-lg p-4 flex flex-col items-center justify-center gap-2 hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-all group cursor-pointer"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files[0];
+                if (file && (file.type.startsWith('image/') || file.type.startsWith('video/'))) {
+                  handleTargetUpload(file);
+                }
+              }}
+            >
+              <Download className="w-6 h-6 opacity-20 group-hover:opacity-100 group-hover:text-cyan-500 transition-all" />
+              <span className="text-[10px] uppercase font-bold tracking-widest opacity-40 group-hover:opacity-100 px-4 text-center leading-tight">Drop New Face Here <br/><span className="text-[8px] opacity-60">Supports Image & Video</span></span>
             </div>
           </section>
 
@@ -696,7 +847,17 @@ export default function App() {
                     <div className="w-2 h-2 rounded-full bg-cyan-500 shadow-[0_0_5px_rgba(6,182,212,0.5)]" />
                   </div>
                 </Tooltip>
-                <FolderOpen className="w-4 h-4 text-orange-400 cursor-pointer hover:scale-110 transition-transform" />
+                <FolderOpen 
+                  onClick={() => facesFolderInputRef.current?.click()}
+                  className="w-4 h-4 text-orange-400 cursor-pointer hover:scale-110 transition-transform" 
+                />
+                <input
+                  type="file"
+                  ref={facesFolderInputRef}
+                  className="hidden"
+                  {...({ webkitdirectory: "", directory: "" } as any)}
+                  onChange={(e) => handleFolderUpload(e, 'faces')}
+                />
               </div>
             </div>
 
@@ -808,61 +969,72 @@ export default function App() {
       {/* Main Content: Preview & Controls */}
       <main className="flex-1 flex flex-col bg-[#0b0c0e] relative">
         {/* Top Bar: View Options */}
-        <header className="h-12 border-b border-[#2a2b2e] bg-[#151619] flex items-center px-4 gap-6">
-          <div className="flex items-center gap-4 text-xs font-medium">
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <input type="checkbox" defaultChecked className="accent-cyan-500" />
-              <span className="group-hover:text-cyan-400 transition-colors">Media Panel</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <input type="checkbox" defaultChecked className="accent-cyan-500" />
-              <span className="group-hover:text-cyan-400 transition-colors">Faces Panel</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <input type="checkbox" defaultChecked className="accent-cyan-500" />
-              <span className="group-hover:text-cyan-400 transition-colors">Parameters Panel</span>
-            </label>
-            <div className="h-4 w-px bg-[#2a2b2e]" />
-            <Tooltip text="Enable Live Swapping: See the swap result in real-time during playback.">
+        <header className="h-12 border-b border-[#2a2b2e] bg-[#151619] flex items-center justify-between px-4">
+          <div className="flex-1 flex items-center gap-6">
+            <div className="flex items-center gap-4 text-xs font-medium">
               <label className="flex items-center gap-2 cursor-pointer group">
-                <div 
-                  onClick={() => setIsLiveSwapping(!isLiveSwapping)}
-                  className={`w-8 h-4 rounded-full border border-[#2a2b2e] relative transition-all group-hover:border-cyan-500/50 ${isLiveSwapping ? 'bg-cyan-500/20' : 'bg-[#1c1d21]'}`}
-                >
-                  <motion.div 
-                    animate={{ x: isLiveSwapping ? 16 : 4 }}
-                    className={`absolute top-1 w-2 h-2 rounded-full shadow-[0_0_5px_rgba(6,182,212,0.5)] ${isLiveSwapping ? 'bg-cyan-500' : 'bg-[#8e9299]'}`} 
-                  />
-                </div>
-                <span className={`text-[9px] font-bold uppercase transition-colors ${isLiveSwapping ? 'text-cyan-400' : 'text-[#8e9299]'}`}>Live Swap</span>
+                <input type="checkbox" defaultChecked className="accent-cyan-500" />
+                <span className="group-hover:text-cyan-400 transition-colors text-[10px]">Media Panel</span>
               </label>
-            </Tooltip>
-            <div className="h-4 w-px bg-[#2a2b2e]" />
-            <Tooltip text="Stream processed video to Virtual Camera for Twitch, Zoom, or YouTube.">
               <label className="flex items-center gap-2 cursor-pointer group">
-                <div 
-                  onClick={() => setIsVirtualCameraEnabled(!isVirtualCameraEnabled)}
-                  className={`w-8 h-4 rounded-full border border-[#2a2b2e] relative transition-all group-hover:border-cyan-500/50 ${isVirtualCameraEnabled ? 'bg-orange-500/20' : 'bg-[#1c1d21]'}`}
-                >
-                  <motion.div 
-                    animate={{ x: isVirtualCameraEnabled ? 16 : 4 }}
-                    className={`absolute top-1 w-2 h-2 rounded-full shadow-[0_0_5px_rgba(249,115,22,0.5)] ${isVirtualCameraEnabled ? 'bg-orange-500' : 'bg-[#8e9299]'}`} 
-                  />
-                </div>
-                <span className={`text-[9px] font-bold uppercase transition-colors ${isVirtualCameraEnabled ? 'text-orange-400' : 'text-[#8e9299]'}`}>Virtual Cam</span>
+                <input type="checkbox" defaultChecked className="accent-cyan-500" />
+                <span className="group-hover:text-cyan-400 transition-colors text-[10px]">Faces Panel</span>
               </label>
-            </Tooltip>
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input type="checkbox" defaultChecked className="accent-cyan-500" />
+                <span className="group-hover:text-cyan-400 transition-colors text-[10px]">Params Panel</span>
+              </label>
+              <div className="h-4 w-px bg-[#2a2b2e]" />
+              <Tooltip text="Enable Live Swapping: See the swap result in real-time during playback.">
+                <label className="flex items-center gap-2 cursor-pointer group">
+                  <div 
+                    onClick={() => setIsLiveSwapping(!isLiveSwapping)}
+                    className={`w-8 h-4 rounded-full border border-[#2a2b2e] relative transition-all group-hover:border-cyan-500/50 ${isLiveSwapping ? 'bg-cyan-500/20' : 'bg-[#1c1d21]'}`}
+                  >
+                    <motion.div 
+                      animate={{ x: isLiveSwapping ? 16 : 4 }}
+                      className={`absolute top-1 w-2 h-2 rounded-full shadow-[0_0_5px_rgba(6,182,212,0.5)] ${isLiveSwapping ? 'bg-cyan-500' : 'bg-[#8e9299]'}`} 
+                    />
+                  </div>
+                  <span className={`text-[9px] font-bold uppercase transition-colors ${isLiveSwapping ? 'text-cyan-400' : 'text-[#8e9299]'}`}>Live Swap</span>
+                </label>
+              </Tooltip>
+            </div>
           </div>
-          <div className="h-4 w-px bg-[#2a2b2e]" />
-          <div className="flex items-center gap-4 text-xs font-medium">
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <input type="checkbox" defaultChecked className="accent-cyan-500" />
-              <span className="group-hover:text-cyan-400 transition-colors">View Face Compare</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <input type="checkbox" className="accent-cyan-500" />
-              <span className="group-hover:text-cyan-400 transition-colors">View Face Mask</span>
-            </label>
+
+          <div className="flex items-center gap-6 shrink-0">
+            {/* VRAM MONITOR */}
+            <div className="flex items-center gap-3 px-3 py-1 bg-black/40 border border-[#2a2b2e] rounded-full">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-bold text-[#8e9299] uppercase tracking-tighter">VRAM Usage</span>
+                <div className="flex items-baseline gap-1">
+                  <span className={`text-[10px] font-mono font-bold ${vramUsage / totalVram > 0.8 ? 'text-orange-500' : 'text-cyan-400'}`}>{vramUsage.toFixed(2)}</span>
+                  <span className="text-[8px] text-[#5e6269] tracking-tighter">/ {totalVram.toFixed(0)} GB</span>
+                </div>
+              </div>
+              <div className="w-16 h-1 bg-[#2a2b2e] rounded-full overflow-hidden relative">
+                <motion.div 
+                  className={`absolute left-0 top-0 h-full shadow-[0_0_8px_rgba(6,182,212,0.4)] ${vramUsage / totalVram > 0.8 ? 'bg-orange-500' : 'bg-cyan-500'}`}
+                  animate={{ width: `${(vramUsage / totalVram) * 100}%` }}
+                />
+              </div>
+              <Tooltip text="Clear VRAM cache to free up resources.">
+                <button onClick={clearVram} className="p-1 hover:bg-[#2a2b2e] rounded transition-colors group">
+                  <RefreshCw className="w-3 h-3 text-[#8e9299] group-hover:text-white transition-transform group-active:rotate-180" />
+                </button>
+              </Tooltip>
+            </div>
+
+            <div className="flex items-center gap-3 border-l border-[#2a2b2e] pl-6">
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input type="checkbox" defaultChecked className="accent-cyan-500" />
+                <span className="group-hover:text-cyan-400 transition-colors">View Face Compare</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input type="checkbox" className="accent-cyan-500" />
+                <span className="group-hover:text-cyan-400 transition-colors">View Face Mask</span>
+              </label>
+            </div>
           </div>
         </header>
 
@@ -984,14 +1156,72 @@ export default function App() {
             {/* Swapped Result Preview */}
             <div className="flex-1 bg-[#151619] rounded-xl border border-[#2a2b2e] overflow-hidden flex flex-col shadow-2xl relative">
               <div className="p-3 border-b border-[#2a2b2e] flex items-center justify-between bg-[#1c1d21]">
-                <span className="text-[10px] uppercase tracking-widest font-bold text-orange-500">Swapped Result</span>
-                <div className="flex gap-2">
-                  <Download className="w-3.5 h-3.5 opacity-40 hover:opacity-100 cursor-pointer" />
-                  <Maximize2 className="w-3.5 h-3.5 opacity-40 hover:opacity-100 cursor-pointer" />
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] uppercase tracking-widest font-bold text-orange-500">Swapped Result</span>
+                  {swappedResult && (
+                    <motion.div 
+                      animate={{ scale: [1, 1.05, 1] }} 
+                      transition={{ duration: 2, repeat: Infinity }}
+                      className="flex items-center gap-1 px-2 py-0.5 bg-green-500/10 border border-green-500/20 rounded text-[8px] font-bold text-green-400 uppercase"
+                    >
+                      Ready
+                    </motion.div>
+                  )}
+                </div>
+                <div className="flex items-center gap-4">
+                  {swappedResult && (
+                    <div className="flex items-center gap-3 px-3 py-1 bg-black/40 border border-[#2a2b2e] rounded-full">
+                      <Layers className="w-3 h-3 text-[#8e9299]" />
+                      <input 
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={overlayTransparency}
+                        onChange={(e) => setOverlayTransparency(parseInt(e.target.value))}
+                        className="w-20 h-1 accent-cyan-500 bg-[#2a2b2e] rounded-lg cursor-pointer"
+                      />
+                      <span className="text-[9px] font-mono text-cyan-400 w-6">{overlayTransparency}%</span>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    {swappedResult && (
+                      <div className="flex items-center bg-black/40 border border-[#2a2b2e] rounded p-0.5">
+                        <button 
+                          onClick={() => { setShowOriginal(false); setIsComparisonMode(false); }}
+                          className={`p-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${!showOriginal && !isComparisonMode ? 'bg-orange-500 text-white shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'text-[#8e9299] hover:text-white'}`}
+                        >
+                          Swapped
+                        </button>
+                        <button 
+                          onClick={() => { setShowOriginal(true); setIsComparisonMode(false); }}
+                          className={`p-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${showOriginal && !isComparisonMode ? 'bg-orange-500 text-white shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'text-[#8e9299] hover:text-white'}`}
+                        >
+                          Original
+                        </button>
+                        <button 
+                          onClick={() => { setIsComparisonMode(true); setShowOriginal(false); }}
+                          className={`p-1 px-2 rounded text-[9px] font-bold uppercase transition-all ${isComparisonMode ? 'bg-cyan-500 text-white shadow-[0_0_8px_rgba(6,182,212,0.4)]' : 'text-[#8e9299] hover:text-white'}`}
+                        >
+                          Compare
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1.5 border-l border-[#2a2b2e] pl-3">
+                    <Tooltip text="Download Result">
+                      <Download className="w-3.5 h-3.5 opacity-40 hover:opacity-100 cursor-pointer transition-opacity" />
+                    </Tooltip>
+                    <Tooltip text="Toggle Fullscreen">
+                      <Maximize2 className="w-3.5 h-3.5 opacity-40 hover:opacity-100 cursor-pointer transition-opacity" />
+                    </Tooltip>
+                    <Tooltip text="Share Result">
+                      <Share2 className="w-3.5 h-3.5 opacity-40 hover:opacity-100 cursor-pointer transition-opacity" />
+                    </Tooltip>
+                  </div>
                 </div>
               </div>
-              <div className="flex-1 relative bg-black flex items-center justify-center">
-                <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+            </div>
+            <div className="flex-1 relative bg-black flex items-center justify-center group/preview">
+                <div className="absolute top-4 right-4 z-20 flex flex-col items-end gap-2">
                   <Tooltip text="Enable real-time preview of the processed video.">
                     <button 
                       onClick={() => setIsLivePlaybackEnabled(!isLivePlaybackEnabled)}
@@ -1005,6 +1235,33 @@ export default function App() {
                       <span className="text-[10px] font-bold uppercase tracking-widest">Live Playback</span>
                     </button>
                   </Tooltip>
+                  
+                  {swappedResult && !isProcessing && (
+                    <div className="opacity-0 group-hover/preview:opacity-100 transition-opacity space-y-2 pointer-events-none">
+                      <div className="bg-black/60 backdrop-blur-md border border-[#2a2b2e] rounded-lg p-2 text-[9px] font-mono space-y-1 w-48 shadow-xl">
+                        <div className="flex justify-between border-b border-[#2a2b2e] pb-1 mb-1">
+                          <span className="text-[#8e9299]">Resolution</span>
+                          <span className="text-white">{settings.upscaling ? (settings.upscaleFactor === '4x' ? '4K' : '1080p') : '720p (Native)'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#8e9299]">Engine</span>
+                          <span className="text-cyan-400">{settings.swapperModel.split(' ')[0]}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#8e9299]">Detector</span>
+                          <span className="text-white">{settings.faceDetector}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#8e9299]">Enhancer</span>
+                          <span className="text-white">{settings.faceEnhancer === 'none' ? 'Disabled' : settings.faceEnhancer}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#8e9299]">VRAM Usage</span>
+                          <span className="text-orange-400">{(4.2 + (settings.upscaling ? 2.1 : 0)).toFixed(1)} GB</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <AnimatePresence mode="wait">
@@ -1061,6 +1318,11 @@ export default function App() {
                         <img src={swappedResult} className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
                         {isLivePlaybackEnabled && (
                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <motion.div 
+                              className="absolute inset-x-0 h-px bg-cyan-400/30"
+                              animate={{ top: ['0%', '100%'] }}
+                              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                            />
                             <div className="w-full h-1 bg-cyan-500/20 absolute bottom-0">
                               <motion.div 
                                 className="h-full bg-cyan-500"
@@ -1079,6 +1341,11 @@ export default function App() {
                         <img src={swappedResult} className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity" style={{ filter: 'hue-rotate(15deg) contrast(1.1)' }} referrerPolicy="no-referrer" />
                         {isLivePlaybackEnabled && (
                           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <motion.div 
+                              className="absolute inset-x-0 h-px bg-orange-400/30"
+                              animate={{ top: ['0%', '100%'] }}
+                              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                            />
                             <div className="w-full h-1 bg-orange-500/20 absolute bottom-0">
                               <motion.div 
                                 className="h-full bg-orange-500"
@@ -1098,31 +1365,84 @@ export default function App() {
                       key={swappedResult}
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
-                      className="relative w-full h-full flex items-center justify-center"
+                      className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black"
                     >
+                      {/* Base Image (Original) */}
                       <img 
-                        src={swappedResult} 
-                        className="max-w-full max-h-full object-contain" 
+                        src={selectedTarget?.url} 
+                        className={`max-w-full max-h-full object-contain ${isComparisonMode ? 'hidden' : 'block opacity-100'}`} 
                         referrerPolicy="no-referrer"
+                        alt="Original"
                       />
-                      {isLivePlaybackEnabled && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 border-2 border-cyan-500/20 rounded-full flex items-center justify-center">
-                            <Play className="w-4 h-4 text-cyan-500 fill-current animate-pulse" />
-                          </div>
-                          <div className="w-full h-1 bg-cyan-500/10 absolute bottom-0">
-                            <motion.div 
-                              className="h-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]"
-                              animate={{ width: ['0%', '100%'] }}
-                              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-                            />
-                          </div>
-                          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md border border-cyan-500/30 rounded px-2 py-1 flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
-                            <span className="text-[8px] font-bold text-white uppercase tracking-widest">Live Preview</span>
-                          </div>
+
+                      {/* Swapped Overlay */}
+                      {!isComparisonMode && (
+                        <motion.img 
+                          key="swapped-overlay"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: showOriginal ? 0 : overlayTransparency / 100 }}
+                          transition={{ duration: 0.3 }}
+                          src={swappedResult} 
+                          className="absolute inset-0 m-auto max-w-full max-h-full object-contain pointer-events-none" 
+                          referrerPolicy="no-referrer"
+                          alt="Swapped"
+                        />
+                      )}
+
+                      {showOriginal && (
+                        <motion.div 
+                          initial={{ opacity: 0, y: -20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="absolute top-4 left-1/2 -translate-x-1/2 bg-orange-600/80 backdrop-blur-sm text-[10px] font-bold text-white px-3 py-1 rounded-full uppercase tracking-widest shadow-lg z-10"
+                        >
+                          Original Reference
+                        </motion.div>
+                      )}
+
+                      {!showOriginal && !isComparisonMode && overlayTransparency < 100 && (
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-cyan-600/80 backdrop-blur-sm text-[9px] font-bold text-white px-3 py-1 rounded-full uppercase tracking-tighter z-10">
+                          Overlay Active: {overlayTransparency}% Transparency
                         </div>
                       )}
+
+                      {isLivePlaybackEnabled && !showOriginal && !isComparisonMode && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none overflow-hidden">
+                          <motion.div 
+                            className="absolute inset-x-0 h-px bg-cyan-400"
+                            animate={{ top: ['0%', '100%'] }}
+                            transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
+                            style={{ opacity: overlayTransparency / 100 }}
+                          />
+                        </div>
+                      )}
+                    </motion.div>
+                  ) : selectedTarget ? (
+                    <motion.div 
+                      key="live-preview"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black"
+                    >
+                      {/* Live Scan Line */}
+                      <motion.div 
+                        className="absolute inset-x-0 h-0.5 bg-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.8)] z-10"
+                        animate={{ top: ['0%', '100%', '0%'] }}
+                        transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                      />
+                      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 border-2 border-cyan-500/20 rounded-full flex items-center justify-center">
+                        <Play className="w-4 h-4 text-cyan-500 fill-current animate-pulse" />
+                      </div>
+                      <div className="w-full h-1 bg-cyan-500/10 absolute bottom-0">
+                        <motion.div 
+                          className="h-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]"
+                          animate={{ width: ['0%', '100%'] }}
+                          transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                        />
+                      </div>
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md border border-cyan-500/30 rounded px-2 py-1 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                        <span className="text-[8px] font-bold text-white uppercase tracking-widest">Live Preview</span>
+                      </div>
                     </motion.div>
                   ) : (
                     <div className="flex flex-col items-center opacity-20">
@@ -1132,6 +1452,28 @@ export default function App() {
                   )}
                 </AnimatePresence>
               </div>
+              
+              {swappedResult && !isProcessing && (
+                <div className="p-2 bg-[#1c1d21] border-t border-[#2a2b2e] flex items-center justify-between px-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-3 h-3 text-[#8e9299]" />
+                      <span className="text-[9px] text-[#8e9299]">Time: 1.2s</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Wifi className="w-3 h-3 text-[#8e9299]" />
+                      <span className="text-[9px] text-[#8e9299]">Latency: 45ms</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] text-[#8e9299] uppercase font-bold tracking-tighter">Confidence</span>
+                    <div className="w-24 h-1 bg-[#2a2b2e] rounded-full overflow-hidden">
+                      <div className="h-full bg-cyan-500 w-[94%]" />
+                    </div>
+                    <span className="text-[9px] text-cyan-400 font-mono">94.2%</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1489,8 +1831,12 @@ export default function App() {
                       className="w-full bg-[#1c1d21] border border-[#2a2b2e] rounded-md py-1 px-2 text-[10px] focus:outline-none focus:border-cyan-500/50"
                     >
                       <option value="RetinaFace">RetinaFace</option>
-                      <option value="YOLOv5">YOLOv5</option>
-                      <option value="MediaPipe">MediaPipe</option>
+                      <option value="YOLOv5">YOLOv5 (Fast)</option>
+                      <option value="MediaPipe">MediaPipe (BlazeFace)</option>
+                      <option value="SCRFD">SCRFD (Accurate)</option>
+                      <option value="MTCNN">MTCNN</option>
+                      <option value="SSD">SSD</option>
+                      <option value="Dlib">Dlib (HOG)</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
@@ -1502,6 +1848,7 @@ export default function App() {
                     >
                       <option value="68-points">68 Points (High)</option>
                       <option value="5-points">5 Points (Fast)</option>
+                      <option value="FaceMesh">MediaPipe FaceMesh</option>
                     </select>
                   </div>
                 </div>
@@ -2419,6 +2766,41 @@ export default function App() {
           animation: spin-slow 3s linear infinite;
         }
       `}</style>
+
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full border shadow-2xl flex items-center gap-3 ${
+              toast.type === 'success' ? 'bg-green-500/20 border-green-500/50 text-green-400' :
+              toast.type === 'error' ? 'bg-red-500/20 border-red-500/50 text-red-400' :
+              'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+            }`}
+          >
+            {toast.type === 'success' ? <Check className="w-4 h-4" /> : toast.type === 'error' ? <X className="w-4 h-4" /> : <Info className="w-4 h-4" />}
+            <span className="text-sm font-medium">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isScanningFolder && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[99] bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-4"
+          >
+            <div className="w-16 h-16 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin" />
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-lg font-bold tracking-tight text-white">Scanning Folder</span>
+              <span className="text-xs text-[#8e9299]">Importing assets into GuruSwap...</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
