@@ -41,6 +41,7 @@ import {
   Gamepad2,
   Undo2,
   Redo2,
+  UserPlus,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MediaItem, FaceItem, SwapSettings, DEFAULT_SETTINGS } from './types.ts';
@@ -99,7 +100,7 @@ const WebcamPreview = ({ stream }: { stream: MediaStream }) => {
       autoPlay 
       playsInline 
       muted 
-      className="max-w-full max-h-full object-contain mirror" 
+      className="max-w-full max-h-full object-contain" 
     />
   );
 };
@@ -118,6 +119,7 @@ export default function App() {
   const [totalVram] = useState(12.0);
   const [overlayTransparency, setOverlayTransparency] = useState(100);
   const [isDetecting, setIsDetecting] = useState(false);
+  const [liveDetections, setLiveDetections] = useState<{ id: string; box: [number, number, number, number]; confidence: number; obscured: boolean }[]>([]);
   const [detectionStage, setDetectionStage] = useState('');
   const [detectionModel, setDetectionModel] = useState('RetinaFace-ResNet50');
   const [detectedFaces, setDetectedFaces] = useState<{ x: number, y: number, w: number, h: number, confidence: number, isObscured: boolean }[]>([]);
@@ -159,6 +161,35 @@ export default function App() {
     }, 3000);
     return () => clearInterval(interval);
   }, [totalVram]);
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    
+    if (isWebcamActive && !isProcessing) {
+      interval = setInterval(() => {
+        // Randomly simulate 1-3 faces
+        const numFaces = Math.floor(Math.random() * 2) + 1;
+        const newDetections = Array.from({ length: numFaces }).map((_, i) => ({
+          id: `live-${i}`,
+          box: [
+            20 + Math.random() * 50, // x
+            20 + Math.random() * 40, // y
+            20 + Math.random() * 10, // w
+            25 + Math.random() * 15  // h
+          ] as [number, number, number, number],
+          confidence: 0.85 + Math.random() * 0.14,
+          obscured: Math.random() > 0.85
+        }));
+        setLiveDetections(newDetections);
+      }, 800);
+    } else {
+      setLiveDetections([]);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isWebcamActive, isProcessing]);
 
   const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
     setToast({ message, type });
@@ -450,6 +481,30 @@ export default function App() {
       showToast(`No compatible files found in chosen folder.`, 'error');
     }
     e.target.value = '';
+  };
+
+  const cloneTargetFace = () => {
+    if (!selectedTarget) {
+      showToast("No target selected to clone from", "error");
+      return;
+    }
+    
+    const newFace: FaceItem = {
+      id: `f-clone-${Date.now()}`,
+      url: selectedTarget.url,
+      name: `Clone: ${selectedTarget.name}`
+    };
+    
+    setFaces(prev => {
+      if (prev.some(f => f.url === selectedTarget.url)) {
+        showToast("Target face already in gallery", "info");
+        return prev;
+      }
+      return [newFace, ...prev];
+    });
+    
+    setSelectedFace(newFace);
+    showToast("Cloned face from target", "success");
   };
 
   const handleDetectFaces = useCallback(() => {
@@ -847,6 +902,15 @@ export default function App() {
                     <div className="w-2 h-2 rounded-full bg-cyan-500 shadow-[0_0_5px_rgba(6,182,212,0.5)]" />
                   </div>
                 </Tooltip>
+                <Tooltip text="Clone Face from Target: Add the current target's face to your source gallery.">
+                  <button 
+                    onClick={cloneTargetFace}
+                    className="p-1 hover:bg-[#2a2b2e] rounded transition-colors group flex items-center gap-1"
+                  >
+                    <UserPlus className="w-3.5 h-3.5 text-cyan-400 group-hover:scale-110 transition-transform" />
+                    <span className="text-[10px] font-bold text-cyan-400">Clone</span>
+                  </button>
+                </Tooltip>
                 <FolderOpen 
                   onClick={() => facesFolderInputRef.current?.click()}
                   className="w-4 h-4 text-orange-400 cursor-pointer hover:scale-110 transition-transform" 
@@ -1065,12 +1129,53 @@ export default function App() {
                     <Search className={`w-3.5 h-3.5 ${isDetecting ? 'animate-pulse' : ''}`} />
                     <span className="text-[9px] font-bold uppercase">{isDetecting ? 'Analyzing...' : 'Detect Faces'}</span>
                   </button>
+                  <Tooltip text="Clone this target's face into your source gallery.">
+                    <button 
+                      onClick={cloneTargetFace}
+                      className="p-1 rounded hover:bg-[#2a2b2e] text-[#8e9299] hover:text-cyan-400 transition-all flex items-center gap-1.5 px-2"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span className="text-[9px] font-bold uppercase">Clone</span>
+                    </button>
+                  </Tooltip>
                   <Maximize2 className="w-3.5 h-3.5 opacity-40 hover:opacity-100 cursor-pointer" />
                 </div>
               </div>
               <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
                 {isWebcamActive && webcamStream ? (
-                  <WebcamPreview stream={webcamStream} />
+                  <div className="relative w-full h-full flex items-center justify-center">
+                    <div className="absolute top-4 left-4 z-10 flex items-center gap-2 px-2 py-1 bg-black/60 backdrop-blur-md border border-cyan-500/30 rounded">
+                      <div className="w-1.5 h-1.5 bg-cyan-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(6,182,212,0.8)]" />
+                      <span className="text-[9px] font-bold text-white uppercase tracking-widest">Live Analysis</span>
+                    </div>
+                    <WebcamPreview stream={webcamStream} />
+                    {/* Live Detections Overlay */}
+                    {liveDetections.map((det) => (
+                      <motion.div
+                        key={det.id}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className={`absolute border-2 pointer-events-none ${det.obscured ? 'border-red-500/60 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : 'border-cyan-500/60 shadow-[0_0_8px_rgba(6,182,212,0.5)]'}`}
+                        style={{
+                          left: `${det.box[0]}%`,
+                          top: `${det.box[1]}%`,
+                          width: `${det.box[2]}%`,
+                          height: `${det.box[3]}%`,
+                        }}
+                      >
+                        <div className={`absolute top-0 left-0 -translate-y-full px-1.5 py-0.5 rounded-t text-[8px] font-bold uppercase tracking-tight flex items-center gap-1.5 whitespace-nowrap ${det.obscured ? 'bg-red-500 text-white' : 'bg-cyan-500 text-black'}`}>
+                          <span>{(det.confidence * 100).toFixed(1)}%</span>
+                          <span className="opacity-60">{detectionModel.split('-')[0]}</span>
+                          {det.obscured && <div className="w-1 h-1 bg-white rounded-full animate-pulse" title="Obscured" />}
+                        </div>
+                        {det.obscured && (
+                          <div className="absolute inset-0 bg-red-500/10 flex items-center justify-center">
+                            <span className="text-[6px] font-bold text-red-500 uppercase tracking-tighter opacity-50">Obscured</span>
+                          </div>
+                        )}
+                      </motion.div>
+                    ))}
+                  </div>
                 ) : selectedTarget?.type === 'video' ? (
                   <video src={selectedTarget.url} className="max-w-full max-h-full" controls />
                 ) : (
